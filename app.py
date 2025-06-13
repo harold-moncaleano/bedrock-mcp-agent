@@ -28,45 +28,18 @@ app = Flask(__name__)
 CORS(app)  # Habilitar CORS para requests del frontend
 
 # Configuración
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'bedrock-mcp-secret-key')
 AWS_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+FIXED_MODEL_ID = 'anthropic.claude-3-sonnet-20240229-v1:0'  # Modelo fijo
 
 # Inicializar el agente Bedrock MCP
+agent = None
 try:
     agent = BedrockMCPAgent(region_name=AWS_REGION)
-    logger.info(f"Agente Bedrock MCP inicializado en región: {AWS_REGION}")
+    logger.info(f"✅ Agente Bedrock MCP inicializado en región: {AWS_REGION}")
+    logger.info(f"🤖 Usando modelo fijo: {FIXED_MODEL_ID}")
 except Exception as e:
-    logger.error(f"Error inicializando agente Bedrock: {e}")
-    agent = None
-
-# Modelos soportados con metadata
-SUPPORTED_MODELS = {
-    "anthropic.claude-3-sonnet-20240229-v1:0": {
-        "name": "Claude 3 Sonnet",
-        "provider": "Anthropic",
-        "description": "Modelo balanceado para tareas complejas"
-    },
-    "anthropic.claude-3-haiku-20240307-v1:0": {
-        "name": "Claude 3 Haiku",
-        "provider": "Anthropic", 
-        "description": "Modelo rápido y eficiente"
-    },
-    "amazon.titan-text-premier-v1:0": {
-        "name": "Titan Text Premier",
-        "provider": "Amazon",
-        "description": "Modelo de texto avanzado de Amazon"
-    },
-    "amazon.titan-text-express-v1": {
-        "name": "Titan Text Express",
-        "provider": "Amazon",
-        "description": "Modelo de texto rápido de Amazon"
-    },
-    "meta.llama2-70b-chat-v1": {
-        "name": "Llama 2 70B Chat",
-        "provider": "Meta",
-        "description": "Modelo conversacional de Meta"
-    }
-}
+    logger.error(f"❌ Error inicializando agente Bedrock: {e}")
+    logger.warning("⚠️  Verifica tus credenciales AWS y acceso a Bedrock")
 
 @app.route('/')
 def index():
@@ -77,59 +50,12 @@ def index():
 def health_check():
     """Endpoint de health check"""
     return jsonify({
-        "status": "healthy",
+        "status": "healthy" if agent else "error",
         "timestamp": datetime.now().isoformat(),
         "agent_status": "initialized" if agent else "error",
-        "region": AWS_REGION
+        "region": AWS_REGION,
+        "model_id": FIXED_MODEL_ID
     })
-
-@app.route('/api/models', methods=['GET'])
-def get_models():
-    """Obtener lista de modelos disponibles"""
-    try:
-        if not agent:
-            return jsonify({
-                "success": False, 
-                "error": "Agente Bedrock no inicializado"
-            }), 500
-        
-        # Intentar obtener modelos desde AWS
-        try:
-            aws_models = agent.list_available_models()
-            available_models = []
-            
-            for model in aws_models:
-                model_id = model.get('modelId', '')
-                if model_id in SUPPORTED_MODELS:
-                    model_info = SUPPORTED_MODELS[model_id].copy()
-                    model_info['id'] = model_id
-                    model_info['status'] = 'available'
-                    available_models.append(model_info)
-            
-            logger.info(f"Se encontraron {len(available_models)} modelos disponibles")
-            
-        except Exception as e:
-            logger.warning(f"No se pudieron obtener modelos de AWS: {e}")
-            # Devolver modelos por defecto
-            available_models = []
-            for model_id, info in SUPPORTED_MODELS.items():
-                model_info = info.copy()
-                model_info['id'] = model_id
-                model_info['status'] = 'unknown'
-                available_models.append(model_info)
-        
-        return jsonify({
-            "success": True,
-            "models": available_models,
-            "region": AWS_REGION
-        })
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo modelos: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -138,7 +64,7 @@ def chat():
         if not agent:
             return jsonify({
                 "success": False,
-                "error": "Agente Bedrock no inicializado"
+                "error": "Agente Bedrock no inicializado. Verifica credenciales AWS."
             }), 500
         
         # Validar datos de entrada
@@ -149,42 +75,29 @@ def chat():
                 "error": "No se recibieron datos JSON"
             }), 400
         
-        model_id = data.get('model_id')
-        prompt = data.get('prompt')
+        prompt = data.get('prompt', '').strip()
         temperature = data.get('temperature', 0.7)
         max_tokens = data.get('max_tokens', 1000)
         
         # Validaciones
-        if not model_id:
-            return jsonify({
-                "success": False,
-                "error": "model_id es requerido"
-            }), 400
-            
         if not prompt:
             return jsonify({
                 "success": False,
-                "error": "prompt es requerido"
+                "error": "El prompt es requerido"
             }), 400
         
         if not isinstance(temperature, (int, float)) or not (0 <= temperature <= 1):
-            return jsonify({
-                "success": False,
-                "error": "temperature debe estar entre 0 y 1"
-            }), 400
+            temperature = 0.7
             
         if not isinstance(max_tokens, int) or not (1 <= max_tokens <= 4000):
-            return jsonify({
-                "success": False,
-                "error": "max_tokens debe estar entre 1 y 4000"
-            }), 400
+            max_tokens = 1000
         
-        logger.info(f"Procesando chat con modelo: {model_id}")
+        logger.info(f"📨 Procesando mensaje: {prompt[:50]}...")
         start_time = datetime.now()
         
-        # Invocar el modelo de Bedrock
+        # Invocar el modelo de Bedrock con ID fijo
         bedrock_response = agent.invoke_model(
-            model_id=model_id,
+            model_id=FIXED_MODEL_ID,
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature
@@ -194,36 +107,43 @@ def chat():
         processing_time = int((end_time - start_time).total_seconds() * 1000)
         
         # Formatear respuesta según protocolo MCP
-        mcp_response = agent.format_mcp_response(bedrock_response, model_id)
+        mcp_response = agent.format_mcp_response(bedrock_response, FIXED_MODEL_ID)
         
-        # Añadir metadata adicional
-        mcp_response['response']['metadata']['processing_time_ms'] = processing_time
-        mcp_response['response']['metadata']['estimated_tokens'] = len(prompt.split()) + len(mcp_response['response']['text'].split())
+        # Extraer texto de respuesta
+        response_text = mcp_response.get('response', {}).get('text', '')
         
-        logger.info(f"Chat procesado exitosamente en {processing_time}ms")
+        logger.info(f"✅ Respuesta generada en {processing_time}ms")
         
         return jsonify({
             "success": True,
-            "response": mcp_response,
-            "processing_time": processing_time
+            "response": response_text,
+            "model_id": FIXED_MODEL_ID,
+            "metadata": {
+                "processing_time_ms": processing_time,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "timestamp": datetime.now().isoformat()
+            }
         })
         
     except Exception as e:
-        logger.error(f"Error en chat: {e}")
+        logger.error(f"❌ Error en chat: {e}")
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": f"Error procesando solicitud: {str(e)}"
         }), 500
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """Obtener configuración actual del servidor"""
     return jsonify({
+        "model_id": FIXED_MODEL_ID,
         "region": AWS_REGION,
-        "supported_models": list(SUPPORTED_MODELS.keys()),
         "agent_initialized": agent is not None,
         "max_tokens_limit": 4000,
-        "temperature_range": [0, 1]
+        "temperature_range": [0, 1],
+        "default_temperature": 0.7,
+        "default_max_tokens": 1000
     })
 
 @app.errorhandler(404)
@@ -249,14 +169,23 @@ if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
     
-    logger.info(f"Iniciando servidor Flask en {host}:{port}")
-    logger.info(f"Modo debug: {debug}")
-    logger.info(f"Región AWS: {AWS_REGION}")
+    print("🚀 Iniciando Bedrock MCP Agent...")
+    print(f"🌐 Servidor: http://{host}:{port}")
+    print(f"🔧 Debug: {debug}")
+    print(f"🌍 Región AWS: {AWS_REGION}")
+    print(f"🤖 Modelo: {FIXED_MODEL_ID}")
     
     if not agent:
-        logger.warning("⚠️  Agente Bedrock no inicializado - revisa credenciales AWS")
+        print("⚠️  ADVERTENCIA: Agente Bedrock no inicializado")
+        print("🔧 Verifica tus credenciales AWS:")
+        print("   1. Archivo .env con AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY")
+        print("   2. O AWS CLI configurado: aws configure")
+        print("   3. O IAM Role si ejecutas en EC2")
+        print("   4. Acceso habilitado en AWS Bedrock Console")
     else:
-        logger.info("✅ Agente Bedrock inicializado correctamente")
+        print("✅ Agente Bedrock listo")
+    
+    print("-" * 50)
     
     try:
         app.run(
@@ -266,4 +195,4 @@ if __name__ == '__main__':
             threaded=True
         )
     except Exception as e:
-        logger.error(f"Error iniciando servidor: {e}")
+        logger.error(f"❌ Error iniciando servidor: {e}")
