@@ -62,8 +62,21 @@ class BedrockMCPAgent:
             Respuesta del modelo
         """
         try:
-            # Preparar el cuerpo de la solicitud según el modelo
-            if 'claude' in model_id.lower():
+            # Preparar el cuerpo de la solicitud para Claude 3
+            if 'claude-3' in model_id.lower():
+                body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ]
+                }
+            elif 'claude' in model_id.lower():
+                # Claude 2 y versiones anteriores
                 body = {
                     "prompt": f"\n\nHuman: {prompt}\n\nAssistant:",
                     "max_tokens_to_sample": max_tokens,
@@ -87,6 +100,8 @@ class BedrockMCPAgent:
                     "temperature": temperature
                 }
             
+            self.logger.info(f"🚀 Invocando modelo: {model_id}")
+            
             response = self.bedrock_client.invoke_model(
                 body=json.dumps(body),
                 modelId=model_id,
@@ -95,12 +110,12 @@ class BedrockMCPAgent:
             )
             
             response_body = json.loads(response.get('body').read())
-            self.logger.info(f"Modelo {model_id} invocado exitosamente")
+            self.logger.info(f"✅ Modelo {model_id} respondió exitosamente")
             
             return response_body
             
         except Exception as e:
-            self.logger.error(f"Error invocando modelo {model_id}: {str(e)}")
+            self.logger.error(f"❌ Error invocando modelo {model_id}: {str(e)}")
             raise
     
     def list_available_models(self) -> List[Dict[str, Any]]:
@@ -119,11 +134,11 @@ class BedrockMCPAgent:
             response = bedrock_client.list_foundation_models()
             models = response.get('modelSummaries', [])
             
-            self.logger.info(f"Se encontraron {len(models)} modelos disponibles")
+            self.logger.info(f"📋 Se encontraron {len(models)} modelos disponibles")
             return models
             
         except Exception as e:
-            self.logger.error(f"Error listando modelos: {str(e)}")
+            self.logger.error(f"❌ Error listando modelos: {str(e)}")
             raise
     
     def format_mcp_response(self, 
@@ -140,7 +155,15 @@ class BedrockMCPAgent:
             Respuesta formateada para MCP
         """
         # Extraer el texto generado según el modelo
-        if 'claude' in model_id.lower():
+        if 'claude-3' in model_id.lower():
+            # Claude 3 usa formato de mensajes
+            content = bedrock_response.get('content', [])
+            if content and len(content) > 0:
+                generated_text = content[0].get('text', '')
+            else:
+                generated_text = ''
+        elif 'claude' in model_id.lower():
+            # Claude 2 y anteriores
             generated_text = bedrock_response.get('completion', '')
         elif 'titan' in model_id.lower():
             results = bedrock_response.get('results', [])
@@ -158,8 +181,8 @@ class BedrockMCPAgent:
                 "metadata": {
                     "model_id": model_id,
                     "region": self.region_name,
-                    "timestamp": bedrock_response.get('ResponseMetadata', {}).get('HTTPHeaders', {}).get('date', ''),
-                    "request_id": bedrock_response.get('ResponseMetadata', {}).get('RequestId', '')
+                    "usage": bedrock_response.get('usage', {}),
+                    "raw_response": bedrock_response
                 }
             }
         }
@@ -170,23 +193,46 @@ class BedrockMCPAgent:
 def main():
     """Función principal de demostración"""
     try:
+        print("🧠 Bedrock MCP Agent - Demo")
+        print("=" * 40)
+        
         # Inicializar el agente
         agent = BedrockMCPAgent()
+        print("✅ Agente inicializado")
         
         # Listar modelos disponibles
-        print("Modelos disponibles:")
-        models = agent.list_available_models()
-        for model in models[:5]:  # Mostrar solo los primeros 5
-            print(f"- {model.get('modelId', 'N/A')}: {model.get('modelName', 'N/A')}")
+        print("\n📋 Modelos disponibles:")
+        try:
+            models = agent.list_available_models()
+            for i, model in enumerate(models[:5]):  # Mostrar solo los primeros 5
+                print(f"{i+1}. {model.get('modelId', 'N/A')} - {model.get('modelName', 'N/A')}")
+            if len(models) > 5:
+                print(f"... y {len(models) - 5} modelos más")
+        except Exception as e:
+            print(f"❌ Error listando modelos: {e}")
         
-        # Ejemplo de invocación (comentado para evitar errores si no hay credenciales)
-        # model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
-        # response = agent.invoke_model(model_id, "¿Qué es AWS Bedrock?")
+        # Ejemplo de invocación
+        print("\n🚀 Ejemplo de invocación:")
+        model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+        prompt = "¿Qué es AWS Bedrock y para qué sirve?"
+        
+        print(f"Modelo: {model_id}")
+        print(f"Prompt: {prompt}")
+        print("\nEjecutando... (esto tomaría credenciales AWS reales)")
+        
+        # Nota: Comentado para evitar errores sin credenciales
+        # response = agent.invoke_model(model_id, prompt)
         # mcp_response = agent.format_mcp_response(response, model_id)
-        # print(json.dumps(mcp_response, indent=2, ensure_ascii=False))
+        # print(f"Respuesta: {mcp_response['response']['text'][:200]}...")
+        
+        print("✅ Demo completada")
         
     except Exception as e:
-        print(f"Error en la demostración: {e}")
+        print(f"❌ Error en la demostración: {e}")
+        print("\n🔧 Para usar este agente:")
+        print("1. Configura credenciales AWS")
+        print("2. Habilita acceso a Bedrock")
+        print("3. Ejecuta: python app.py")
 
 
 if __name__ == "__main__":
