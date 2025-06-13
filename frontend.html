@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bedrock MCP Agent + Glue Catalog</title>
+    <title>Bedrock MCP Agent Conversacional + Glue</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -23,7 +23,7 @@
 
         // Configuración
         const API_BASE_URL = 'http://localhost:5000';
-        const FIXED_MODEL = 'Claude 3 Sonnet'; // Nombre fijo del modelo
+        const FIXED_MODEL = 'Claude 3 Sonnet Conversacional';
 
         function BedrockMCPApp() {
             const [messages, setMessages] = useState([]);
@@ -36,8 +36,11 @@
             });
             const [showSettings, setShowSettings] = useState(false);
             const [showGluePanel, setShowGluePanel] = useState(false);
+            const [showConversationPanel, setShowConversationPanel] = useState(false);
             const [glueStats, setGlueStats] = useState(null);
             const [hasGlueIntegration, setHasGlueIntegration] = useState(false);
+            const [conversationSummary, setConversationSummary] = useState(null);
+            const [sessionId, setSessionId] = useState('');
             const messagesEndRef = useRef(null);
 
             // Auto scroll al final
@@ -53,16 +56,20 @@
             useEffect(() => {
                 checkServerHealth();
                 loadGlueStats();
+                loadConversationSummary();
             }, []);
 
             // Verificar salud del servidor
             const checkServerHealth = async () => {
                 try {
-                    const response = await fetch(`${API_BASE_URL}/health`);
+                    const response = await fetch(`${API_BASE_URL}/health`, {
+                        credentials: 'include'
+                    });
                     if (response.ok) {
                         const data = await response.json();
                         setServerStatus(data.status === 'healthy' ? 'connected' : 'error');
                         setHasGlueIntegration(data.glue_mcp_status === 'initialized');
+                        setSessionId(data.session_id || '');
                     } else {
                         setServerStatus('error');
                     }
@@ -75,7 +82,9 @@
             // Cargar estadísticas de Glue
             const loadGlueStats = async () => {
                 try {
-                    const response = await fetch(`${API_BASE_URL}/api/glue/stats`);
+                    const response = await fetch(`${API_BASE_URL}/api/glue/stats`, {
+                        credentials: 'include'
+                    });
                     if (response.ok) {
                         const data = await response.json();
                         if (data.success) {
@@ -84,6 +93,23 @@
                     }
                 } catch (error) {
                     console.error('Error cargando estadísticas de Glue:', error);
+                }
+            };
+
+            // Cargar resumen de conversación
+            const loadConversationSummary = async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/conversation/summary`, {
+                        credentials: 'include'
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.success) {
+                            setConversationSummary(data.summary);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error cargando resumen de conversación:', error);
                 }
             };
 
@@ -111,6 +137,7 @@
                         headers: {
                             'Content-Type': 'application/json',
                         },
+                        credentials: 'include',
                         body: JSON.stringify({
                             prompt: messageToSend,
                             temperature: settings.temperature,
@@ -129,6 +156,9 @@
                             metadata: data.metadata
                         };
                         setMessages(prev => [...prev, botMessage]);
+                        
+                        // Actualizar resumen de conversación
+                        loadConversationSummary();
                     } else {
                         throw new Error(data.error || 'Error desconocido del servidor');
                     }
@@ -146,10 +176,27 @@
                 }
             };
 
-            // Enviar consulta predefinida de Glue
-            const sendGlueQuery = (query) => {
+            // Limpiar conversación
+            const clearConversation = async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/conversation/clear`, {
+                        method: 'POST',
+                        credentials: 'include'
+                    });
+                    
+                    if (response.ok) {
+                        setMessages([]);
+                        setConversationSummary(null);
+                        loadConversationSummary();
+                    }
+                } catch (error) {
+                    console.error('Error limpiando conversación:', error);
+                }
+            };
+
+            // Enviar consulta predefinida
+            const sendQuery = (query) => {
                 setCurrentMessage(query);
-                // Simular envío inmediato
                 setTimeout(() => {
                     sendMessage();
                 }, 100);
@@ -161,11 +208,6 @@
                     e.preventDefault();
                     sendMessage();
                 }
-            };
-
-            // Limpiar chat
-            const clearMessages = () => {
-                setMessages([]);
             };
 
             // Componente de estado del servidor
@@ -208,6 +250,49 @@
                                 +Glue
                             </span>
                         )}
+                        <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded-full ml-1">
+                            💬
+                        </span>
+                    </div>
+                );
+            };
+
+            // Panel de conversación
+            const ConversationPanel = () => {
+                if (!showConversationPanel) return null;
+
+                return (
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                                <i className="fas fa-comments mr-2 text-blue-600"></i>
+                                Conversación
+                            </h3>
+                            
+                            {conversationSummary && (
+                                <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                                    <div className="text-sm text-blue-800 space-y-1">
+                                        <div>💬 {conversationSummary.total_messages} mensajes</div>
+                                        <div>🆔 {sessionId}</div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            <div className="space-y-2">
+                                <button
+                                    onClick={clearConversation}
+                                    className="w-full text-left px-3 py-2 text-sm bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-red-700"
+                                >
+                                    🧹 Limpiar conversación
+                                </button>
+                            </div>
+                            
+                            <div className="mt-4 p-3 bg-green-50 rounded-lg">
+                                <div className="text-xs text-green-800">
+                                    💡 <strong>Memoria conversacional:</strong> El asistente recuerda toda nuestra conversación.
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 );
             };
@@ -229,7 +314,7 @@
                                     <div className="text-sm text-purple-800">
                                         <div>📊 {glueStats.catalog_stats?.total_databases || 0} bases de datos</div>
                                         <div>📋 {glueStats.catalog_stats?.total_tables || 0} tablas</div>
-                                        <div>🌍 Región: {glueStats.region}</div>
+                                        <div>🌍 {glueStats.region}</div>
                                     </div>
                                 </div>
                             )}
@@ -238,38 +323,18 @@
                                 <h4 className="text-sm font-medium text-gray-700">Consultas rápidas:</h4>
                                 
                                 <button
-                                    onClick={() => sendGlueQuery('Lista todas las bases de datos en el catálogo de Glue')}
+                                    onClick={() => sendQuery('Lista todas las bases de datos y dame un resumen de lo que contienen')}
                                     className="w-full text-left px-3 py-2 text-sm bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
                                 >
-                                    📋 Listar bases de datos
+                                    📋 Explorar bases de datos
                                 </button>
                                 
                                 <button
-                                    onClick={() => sendGlueQuery('Dame un resumen de las estadísticas del catálogo de datos')}
+                                    onClick={() => sendQuery('Analiza las estadísticas del catálogo y explícame qué tipo de datos tengo disponibles')}
                                     className="w-full text-left px-3 py-2 text-sm bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
                                 >
-                                    📊 Estadísticas del catálogo
+                                    📊 Análisis del catálogo
                                 </button>
-                                
-                                <button
-                                    onClick={() => sendGlueQuery('Busca tablas que contengan la palabra "user" en el nombre')}
-                                    className="w-full text-left px-3 py-2 text-sm bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
-                                >
-                                    🔍 Buscar tablas
-                                </button>
-                                
-                                <button
-                                    onClick={() => sendGlueQuery('Explícame la estructura del catálogo de datos y sus componentes principales')}
-                                    className="w-full text-left px-3 py-2 text-sm bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
-                                >
-                                    ℹ️ Explicar catálogo
-                                </button>
-                            </div>
-                            
-                            <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-                                <div className="text-xs text-blue-800">
-                                    💡 <strong>Tip:</strong> Puedes hacer preguntas sobre bases de datos, tablas, esquemas y metadatos. El asistente tiene acceso completo al catálogo de Glue.
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -291,13 +356,23 @@
                                         <p className="text-sm text-gray-600">
                                             {FIXED_MODEL}
                                             {hasGlueIntegration && (
-                                                <span className="ml-2 text-purple-600">+ AWS Glue Catalog</span>
+                                                <span className="ml-2 text-purple-600">+ AWS Glue</span>
                                             )}
                                         </p>
                                     </div>
                                 </div>
-                                <div className="flex items-center space-x-4">
+                                <div className="flex items-center space-x-2">
                                     <ServerStatus />
+                                    <button
+                                        onClick={() => setShowConversationPanel(!showConversationPanel)}
+                                        className={`p-2 rounded-lg transition-all ${
+                                            showConversationPanel 
+                                                ? 'text-blue-700 bg-blue-100' 
+                                                : 'text-gray-500 hover:text-blue-700 hover:bg-blue-50'
+                                        }`}
+                                    >
+                                        <i className="fas fa-comments"></i>
+                                    </button>
                                     {hasGlueIntegration && (
                                         <button
                                             onClick={() => setShowGluePanel(!showGluePanel)}
@@ -306,31 +381,21 @@
                                                     ? 'text-purple-700 bg-purple-100' 
                                                     : 'text-gray-500 hover:text-purple-700 hover:bg-purple-50'
                                             }`}
-                                            title="Panel Glue Catalog"
                                         >
-                                            <i className="fas fa-database text-lg"></i>
+                                            <i className="fas fa-database"></i>
                                         </button>
                                     )}
                                     <button
                                         onClick={() => setShowSettings(!showSettings)}
                                         className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-all"
-                                        title="Configuración"
                                     >
-                                        <i className="fas fa-cog text-lg"></i>
+                                        <i className="fas fa-cog"></i>
                                     </button>
                                     <button
-                                        onClick={clearMessages}
-                                        className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-all"
-                                        title="Limpiar chat"
+                                        onClick={clearConversation}
+                                        className="p-2 text-gray-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-all"
                                     >
-                                        <i className="fas fa-trash-alt text-lg"></i>
-                                    </button>
-                                    <button
-                                        onClick={() => { checkServerHealth(); loadGlueStats(); }}
-                                        className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-all"
-                                        title="Verificar conexión"
-                                    >
-                                        <i className="fas fa-sync-alt text-lg"></i>
+                                        <i className="fas fa-broom"></i>
                                     </button>
                                 </div>
                             </div>
@@ -339,25 +404,16 @@
 
                     <div className="max-w-7xl mx-auto px-4 py-6">
                         <div className="grid grid-cols-1 lg:grid-cols-6 gap-6">
-                            {/* Panel de configuración */}
+                            {/* Paneles laterales */}
                             {showSettings && (
                                 <div className="lg:col-span-1">
                                     <div className="bg-white rounded-xl shadow-lg p-6">
-                                        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                                        <h3 className="text-lg font-semibold text-gray-900 mb-4">
                                             <i className="fas fa-sliders-h mr-2 text-blue-600"></i>
                                             Configuración
                                         </h3>
                                         
                                         <div className="space-y-4">
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                                    Modelo (Fijo)
-                                                </label>
-                                                <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600">
-                                                    {FIXED_MODEL}
-                                                </div>
-                                            </div>
-
                                             <div>
                                                 <label className="block text-sm font-medium text-gray-700 mb-2">
                                                     Temperatura: {settings.temperature}
@@ -374,10 +430,6 @@
                                                     }))}
                                                     className="w-full accent-blue-600"
                                                 />
-                                                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                                                    <span>Conservador</span>
-                                                    <span>Creativo</span>
-                                                </div>
                                             </div>
 
                                             <div>
@@ -394,7 +446,7 @@
                                                         ...prev,
                                                         maxTokens: parseInt(e.target.value) || 1000
                                                     }))}
-                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                                                 />
                                             </div>
                                         </div>
@@ -402,14 +454,15 @@
                                 </div>
                             )}
 
-                            {/* Panel de Glue Catalog */}
+                            <ConversationPanel />
                             <GluePanel />
 
                             {/* Chat principal */}
                             <div className={`${
-                                (showSettings && showGluePanel) ? "lg:col-span-4" :
-                                (showSettings || showGluePanel) ? "lg:col-span-5" :
-                                "lg:col-span-6"
+                                [showSettings, showConversationPanel, showGluePanel].filter(Boolean).length === 0 ? "lg:col-span-6" :
+                                [showSettings, showConversationPanel, showGluePanel].filter(Boolean).length === 1 ? "lg:col-span-5" :
+                                [showSettings, showConversationPanel, showGluePanel].filter(Boolean).length === 2 ? "lg:col-span-4" :
+                                "lg:col-span-3"
                             }`}>
                                 <div className="bg-white rounded-xl shadow-lg chat-container flex flex-col">
                                     {/* Área de mensajes */}
@@ -421,54 +474,30 @@
                                                         <i className="fas fa-comments text-white text-3xl"></i>
                                                     </div>
                                                     <h3 className="text-2xl font-bold text-gray-900 mb-3">
-                                                        ¡Bienvenido!
+                                                        ¡Conversación inteligente!
                                                     </h3>
                                                     <p className="text-gray-600 mb-4">
-                                                        Chatea con {FIXED_MODEL}
+                                                        {FIXED_MODEL} con memoria conversacional
                                                         {hasGlueIntegration && (
                                                             <span className="block text-purple-600 font-medium mt-1">
-                                                                + Acceso completo al catálogo de AWS Glue
+                                                                + AWS Glue Catalog
                                                             </span>
                                                         )}
                                                     </p>
                                                     
-                                                    {hasGlueIntegration && (
-                                                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
-                                                            <div className="flex items-center text-purple-800 mb-2">
-                                                                <i className="fas fa-magic mr-2"></i>
-                                                                <span className="font-medium">Nuevas capacidades:</span>
-                                                            </div>
-                                                            <ul className="text-sm text-purple-700 text-left space-y-1">
-                                                                <li>• Consultar bases de datos y tablas</li>
-                                                                <li>• Analizar esquemas y metadatos</li>
-                                                                <li>• Buscar y explorar el catálogo</li>
-                                                                <li>• Respuestas enriquecidas con contexto</li>
-                                                            </ul>
-                                                        </div>
-                                                    )}
+                                                    <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                                        <ul className="text-sm text-blue-700 text-left space-y-1">
+                                                            <li>• 🧠 Memoria completa de conversación</li>
+                                                            <li>• 🔗 Referencias a mensajes anteriores</li>
+                                                            <li>• 📊 Análisis con datos reales</li>
+                                                            <li>• 💡 Recomendaciones personalizadas</li>
+                                                        </ul>
+                                                    </div>
                                                     
                                                     {serverStatus === 'offline' && (
                                                         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-left">
-                                                            <div className="flex items-center text-red-800 mb-2">
-                                                                <i className="fas fa-exclamation-triangle mr-2"></i>
-                                                                <span className="font-medium">Servidor desconectado</span>
-                                                            </div>
                                                             <p className="text-red-700 text-sm mb-2">
-                                                                Ejecuta este comando para iniciar el servidor:
-                                                            </p>
-                                                            <code className="block bg-gray-900 text-green-400 p-2 rounded text-xs">
-                                                                python app.py
-                                                            </code>
-                                                        </div>
-                                                    )}
-                                                    {serverStatus === 'error' && (
-                                                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-left">
-                                                            <div className="flex items-center text-yellow-800 mb-2">
-                                                                <i className="fas fa-exclamation-triangle mr-2"></i>
-                                                                <span className="font-medium">Error de configuración</span>
-                                                            </div>
-                                                            <p className="text-yellow-700 text-sm">
-                                                                Verifica tus credenciales AWS y acceso a Bedrock{hasGlueIntegration ? ' y Glue' : ''}.
+                                                                Ejecuta: <code className="bg-gray-800 text-green-400 px-2 py-1 rounded">python app.py</code>
                                                             </p>
                                                         </div>
                                                     )}
@@ -495,20 +524,16 @@
                                                             </div>
                                                             
                                                             {message.metadata && (
-                                                                <div className="flex items-center space-x-4 mt-3 pt-2 border-t border-gray-200 text-xs opacity-75">
-                                                                    <span>
-                                                                        <i className="fas fa-clock mr-1"></i>
-                                                                        {message.metadata.processing_time_ms}ms
-                                                                    </span>
-                                                                    <span>
-                                                                        <i className="fas fa-thermometer-half mr-1"></i>
-                                                                        Temp: {message.metadata.temperature}
-                                                                    </span>
+                                                                <div className="flex items-center space-x-3 mt-2 pt-2 border-t border-gray-200 text-xs opacity-75">
+                                                                    <span>⏱️ {message.metadata.processing_time_ms}ms</span>
+                                                                    {message.metadata.has_context && (
+                                                                        <span className="text-blue-600">🧠 Contexto</span>
+                                                                    )}
                                                                     {message.metadata.glue_enhanced && (
-                                                                        <span className="text-purple-600">
-                                                                            <i className="fas fa-database mr-1"></i>
-                                                                            Glue+
-                                                                        </span>
+                                                                        <span className="text-purple-600">🗄️ Glue</span>
+                                                                    )}
+                                                                    {message.metadata.conversation_length > 0 && (
+                                                                        <span className="text-green-600">💬 {message.metadata.conversation_length}</span>
                                                                     )}
                                                                 </div>
                                                             )}
@@ -545,9 +570,7 @@
                                                     onKeyPress={handleKeyPress}
                                                     placeholder={
                                                         serverStatus === 'connected' 
-                                                            ? hasGlueIntegration 
-                                                                ? "Pregunta sobre datos, tablas, o cualquier tema... (Enter para enviar)" 
-                                                                : "Escribe tu mensaje... (Enter para enviar)"
+                                                            ? "Chatea con memoria conversacional... (Enter para enviar)" 
                                                             : "Servidor desconectado..."
                                                     }
                                                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
